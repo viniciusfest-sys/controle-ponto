@@ -165,7 +165,9 @@ export default function ControlePonto() {
   }
 
   const formatDateForDisplay = (dateString: string) => {
-    const date = new Date(dateString + 'T00:00:00')
+    // Criar data sem conversão de fuso horário
+    const [year, month, day] = dateString.split('-')
+    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
     return date.toLocaleDateString('pt-BR', {
       day: '2-digit',
       month: '2-digit',
@@ -185,7 +187,9 @@ export default function ControlePonto() {
   }
 
   const getMonthName = (dateString: string) => {
-    const date = new Date(dateString + 'T00:00:00')
+    // Criar data sem conversão de fuso horário
+    const [year, month, day] = dateString.split('-')
+    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
     return date.toLocaleDateString('pt-BR', { 
       month: 'long', 
       year: 'numeric' 
@@ -523,13 +527,15 @@ export default function ControlePonto() {
 
     // Filtrar por período
     if (reportPeriod.type === 'monthly') {
-      const startDate = new Date(reportPeriod.startDate + 'T00:00:00')
-      const year = startDate.getFullYear()
-      const month = startDate.getMonth()
+      const [year, month, day] = reportPeriod.startDate.split('-')
+      const startYear = parseInt(year)
+      const startMonth = parseInt(month) - 1 // JavaScript months are 0-indexed
       
       filteredEntries = filteredEntries.filter(entry => {
-        const entryDate = new Date(entry.date + 'T00:00:00')
-        return entryDate.getFullYear() === year && entryDate.getMonth() === month
+        const [entryYear, entryMonth, entryDay] = entry.date.split('-')
+        const entryYearNum = parseInt(entryYear)
+        const entryMonthNum = parseInt(entryMonth) - 1 // JavaScript months are 0-indexed
+        return entryYearNum === startYear && entryMonthNum === startMonth
       })
     } else {
       filteredEntries = filteredEntries.filter(entry => 
