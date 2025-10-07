@@ -85,6 +85,12 @@ export default function ControlePonto() {
   const [signature, setSignature] = useState('')
   const [employeeToClockOut, setEmployeeToClockOut] = useState<Employee | null>(null)
 
+  // Estados para edição de entradas no relatório
+  const [editingEntry, setEditingEntry] = useState<TimeEntry | null>(null)
+  const [editClockIn, setEditClockIn] = useState('')
+  const [editClockOut, setEditClockOut] = useState('')
+  const [editBreakTime, setEditBreakTime] = useState('')
+
   // Estado para controlar se o componente foi montado no cliente
   const [isMounted, setIsMounted] = useState(false)
 
@@ -268,12 +274,86 @@ export default function ControlePonto() {
     ))
   }
 
-  // Função para excluir registro de ponto
+  // Função para excluir registro de ponto - MELHORADA
   const deleteTimeEntry = (entryId: string) => {
-    if (confirm('Tem certeza que deseja excluir este registro de ponto?')) {
+    const entry = timeEntries.find(e => e.id === entryId)
+    if (!entry) return
+
+    const confirmMessage = `Tem certeza que deseja excluir o registro de ponto de ${entry.employeeName} do dia ${formatDateForDisplay(entry.date)}?`
+    
+    if (confirm(confirmMessage)) {
       setTimeEntries(prev => prev.filter(entry => entry.id !== entryId))
       alert('Registro excluído com sucesso!')
     }
+  }
+
+  // Função para iniciar edição de entrada - MELHORADA
+  const startEditEntry = (entry: TimeEntry) => {
+    setEditingEntry(entry)
+    setEditClockIn(entry.clockIn || '')
+    setEditClockOut(entry.clockOut || '')
+    setEditBreakTime(entry.breakTime ? entry.breakTime.toString() : '')
+  }
+
+  // Função para salvar edição de entrada - MELHORADA
+  const saveEditEntry = () => {
+    if (!editingEntry || !editClockIn) {
+      alert('Por favor, preencha pelo menos o horário de entrada')
+      return
+    }
+
+    // Validar formato de horário
+    const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
+    if (!timeRegex.test(editClockIn)) {
+      alert('Formato de horário de entrada inválido. Use HH:MM')
+      return
+    }
+
+    if (editClockOut && !timeRegex.test(editClockOut)) {
+      alert('Formato de horário de saída inválido. Use HH:MM')
+      return
+    }
+
+    // Validar se saída é posterior à entrada
+    if (editClockOut) {
+      const [inHour, inMinute] = editClockIn.split(':').map(Number)
+      const [outHour, outMinute] = editClockOut.split(':').map(Number)
+      const inMinutes = inHour * 60 + inMinute
+      const outMinutes = outHour * 60 + outMinute
+      
+      if (outMinutes <= inMinutes) {
+        alert('O horário de saída deve ser posterior ao horário de entrada')
+        return
+      }
+    }
+
+    setTimeEntries(prev => prev.map(entry => 
+      entry.id === editingEntry.id 
+        ? { 
+            ...entry, 
+            clockIn: editClockIn,
+            clockOut: editClockOut || undefined,
+            status: editClockOut ? 'clocked-out' : 'clocked-in',
+            breakTime: editBreakTime ? parseFloat(editBreakTime) : undefined
+          }
+        : entry
+    ))
+
+    // Limpar estados de edição
+    setEditingEntry(null)
+    setEditClockIn('')
+    setEditClockOut('')
+    setEditBreakTime('')
+    
+    alert('Registro atualizado com sucesso!')
+  }
+
+  // Função para cancelar edição
+  const cancelEditEntry = () => {
+    setEditingEntry(null)
+    setEditClockIn('')
+    setEditClockOut('')
+    setEditBreakTime('')
   }
 
   // Função para marcar ponto retroativo
@@ -1500,30 +1580,135 @@ export default function ControlePonto() {
                     <h3 className="font-medium text-gray-800 mb-3">{employee.name}</h3>
                     
                     {employeeEntries.length > 0 ? (
-                      <div className="space-y-2">
+                      <div className="space-y-3">
                         {employeeEntries.map(entry => {
                           const hours = calculateHours(entry)
                           return (
-                            <div key={entry.id} className="text-sm">
-                              <div className="font-medium text-gray-700">
-                                {formatDateForDisplay(entry.date)}
-                              </div>
-                              <div className="grid grid-cols-2 gap-4 mt-1">
-                                <div>
-                                  <span className="text-gray-600">Entrada:</span> {entry.clockIn || 'N/A'}
+                            <div key={entry.id} className="border border-gray-100 rounded-lg p-3">
+                              {/* Verificar se está editando esta entrada */}
+                              {editingEntry?.id === entry.id ? (
+                                <div className="space-y-3">
+                                  <div className="font-medium text-gray-700 mb-2 flex items-center justify-between">
+                                    <span>Editando: {formatDateForDisplay(entry.date)}</span>
+                                    <div className="text-xs text-gray-500">
+                                      ID: {entry.id}
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                                        Entrada *
+                                      </label>
+                                      <input
+                                        type="time"
+                                        value={editClockIn}
+                                        onChange={(e) => setEditClockIn(e.target.value)}
+                                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                                        Saída
+                                      </label>
+                                      <input
+                                        type="time"
+                                        value={editClockOut}
+                                        onChange={(e) => setEditClockOut(e.target.value)}
+                                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                      />
+                                    </div>
+                                  </div>
+                                  
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                                      Tempo de Intervalo (horas)
+                                    </label>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="12"
+                                      step="0.5"
+                                      value={editBreakTime}
+                                      onChange={(e) => setEditBreakTime(e.target.value)}
+                                      placeholder="Ex: 1.5"
+                                      className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    />
+                                  </div>
+                                  
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={saveEditEntry}
+                                      className="flex items-center gap-1 px-3 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors"
+                                    >
+                                      <Save className="w-3 h-3" />
+                                      Salvar
+                                    </button>
+                                    <button
+                                      onClick={cancelEditEntry}
+                                      className="flex items-center gap-1 px-3 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg text-sm font-medium transition-colors"
+                                    >
+                                      <X className="w-3 h-3" />
+                                      Cancelar
+                                    </button>
+                                  </div>
                                 </div>
+                              ) : (
                                 <div>
-                                  <span className="text-gray-600">Saída:</span> {entry.clockOut || 'N/A'}
+                                  <div className="flex justify-between items-start mb-2">
+                                    <div className="font-medium text-gray-700">
+                                      {formatDateForDisplay(entry.date)}
+                                    </div>
+                                    <div className="flex gap-1">
+                                      <button
+                                        onClick={() => startEditEntry(entry)}
+                                        className="flex items-center gap-1 px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-xs font-medium transition-colors"
+                                        title="Editar registro"
+                                      >
+                                        <Edit2 className="w-3 h-3" />
+                                        Editar
+                                      </button>
+                                      <button
+                                        onClick={() => deleteTimeEntry(entry.id)}
+                                        className="flex items-center gap-1 px-2 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-xs font-medium transition-colors"
+                                        title="Excluir registro"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                        Excluir
+                                      </button>
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div>
+                                      <span className="text-gray-600">Entrada:</span> {entry.clockIn || 'N/A'}
+                                    </div>
+                                    <div>
+                                      <span className="text-gray-600">Saída:</span> {entry.clockOut || 'N/A'}
+                                    </div>
+                                    <div>
+                                      <span className="text-gray-600">Trabalhadas:</span> 
+                                      <span className="text-blue-600 font-medium"> {formatHours(hours.worked)}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-gray-600">Extras:</span> 
+                                      <span className="text-green-600 font-medium"> {formatHours(hours.overtime)}</span>
+                                    </div>
+                                  </div>
+                                  
+                                  {entry.breakTime && entry.breakTime > 0 && (
+                                    <div className="text-sm text-blue-600 mt-1">
+                                      Tempo de intervalo: {formatHours(entry.breakTime)}
+                                    </div>
+                                  )}
+                                  
+                                  {entry.signature && (
+                                    <div className="text-sm text-green-600 mt-1">
+                                      ✓ Assinado: {entry.signature}
+                                    </div>
+                                  )}
                                 </div>
-                                <div>
-                                  <span className="text-gray-600">Trabalhadas:</span> 
-                                  <span className="text-blue-600 font-medium"> {formatHours(hours.worked)}</span>
-                                </div>
-                                <div>
-                                  <span className="text-gray-600">Extras:</span> 
-                                  <span className="text-green-600 font-medium"> {formatHours(hours.overtime)}</span>
-                                </div>
-                              </div>
+                              )}
                             </div>
                           )
                         })}
