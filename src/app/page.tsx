@@ -11,6 +11,7 @@ interface Employee {
     workStartTime: string
     workEndTime: string
     workDays: string[] // ['monday', 'tuesday', etc.]
+    expectedBreakTime?: number // Tempo de intervalo esperado em horas
   }
 }
 
@@ -32,6 +33,7 @@ interface WorkSettings {
   workHoursPerDay: number
   toleranceMinutes: number
   workStartTime: string
+  expectedBreakTime: number // Tempo de intervalo padrão esperado em horas
 }
 
 interface ReportPeriod {
@@ -52,7 +54,8 @@ const DEFAULT_EMPLOYEES: Employee[] = [
 const DEFAULT_SETTINGS: WorkSettings = {
   workHoursPerDay: 8,
   toleranceMinutes: 15,
-  workStartTime: '08:00'
+  workStartTime: '08:00',
+  expectedBreakTime: 1 // 1 hora de intervalo padrão
 }
 
 export default function ControlePonto() {
@@ -516,12 +519,13 @@ export default function ControlePonto() {
   }
 
   const calculateHours = (entry: TimeEntry) => {
-    if (!entry.clockIn) return { worked: 0, breaks: 0, overtime: 0, lateness: 0, discountedHours: 0 }
+    if (!entry.clockIn) return { worked: 0, breaks: 0, overtime: 0, lateness: 0, discountedHours: 0, missedBreakOvertime: 0 }
 
     const employee = employees.find(emp => emp.id === entry.employeeId)
     const employeeSettings = employee?.workSchedule || {
       workHoursPerDay: workSettings.workHoursPerDay,
-      workStartTime: employee?.workSchedule?.workStartTime || workSettings.workStartTime
+      workStartTime: employee?.workSchedule?.workStartTime || workSettings.workStartTime,
+      expectedBreakTime: employee?.workSchedule?.expectedBreakTime || workSettings.expectedBreakTime
     }
 
     const clockInTime = new Date(`${entry.date}T${entry.clockIn}`)
@@ -558,23 +562,37 @@ export default function ControlePonto() {
     const excessLateness = Math.max(0, latenessMinutes - workSettings.toleranceMinutes)
     const discountedHours = excessLateness / 60
 
-    const workedMs = totalWorkedMs - totalBreakMs
+    // NOVA LÓGICA: Calcular tempo de intervalo esperado vs real
+    const expectedBreakTimeMs = employeeSettings.expectedBreakTime * 60 * 60 * 1000
+    const actualBreakTimeMs = totalBreakMs
+    
+    // Se o funcionário não tirou o intervalo completo, a diferença vira hora extra
+    let missedBreakOvertime = 0
+    if (actualBreakTimeMs < expectedBreakTimeMs) {
+      const missedBreakMs = expectedBreakTimeMs - actualBreakTimeMs
+      missedBreakOvertime = missedBreakMs / (1000 * 60 * 60) // converter para horas
+    }
+
+    // Calcular horas trabalhadas (tempo total - pausas efetivas)
+    const workedMs = totalWorkedMs - actualBreakTimeMs
     let workedHours = Math.max(0, workedMs / (1000 * 60 * 60))
     
     // Aplicar desconto por atraso
     workedHours = Math.max(0, workedHours - discountedHours)
     
-    const breakHours = totalBreakMs / (1000 * 60 * 60)
+    const breakHours = actualBreakTimeMs / (1000 * 60 * 60)
     
-    // Calcular horas extras automaticamente baseado na jornada
-    const overtime = Math.max(0, workedHours - employeeSettings.workHoursPerDay)
+    // Calcular horas extras: horas trabalhadas acima da jornada + intervalo não tirado
+    const regularOvertime = Math.max(0, workedHours - employeeSettings.workHoursPerDay)
+    const totalOvertime = regularOvertime + missedBreakOvertime
 
     return {
       worked: workedHours,
       breaks: breakHours,
-      overtime: overtime,
+      overtime: totalOvertime,
       lateness: latenessHours,
-      discountedHours: discountedHours
+      discountedHours: discountedHours,
+      missedBreakOvertime: missedBreakOvertime // Nova propriedade para mostrar separadamente
     }
   }
 
@@ -659,7 +677,8 @@ export default function ControlePonto() {
     reportContent += `CONFIGURAÇÕES:\n`
     reportContent += `- Jornada de trabalho padrão: ${workSettings.workHoursPerDay}h\n`
     reportContent += `- Horário de entrada padrão: ${workSettings.workStartTime}\n`
-    reportContent += `- Tolerância: ${workSettings.toleranceMinutes} minutos\n\n`
+    reportContent += `- Tolerância: ${workSettings.toleranceMinutes} minutos\n`
+    reportContent += `- Intervalo esperado padrão: ${formatHours(workSettings.expectedBreakTime)}\n\n`
     
     if (selectedEmployee) {
       reportContent += `FUNCIONÁRIO:\n`
@@ -678,12 +697,16 @@ export default function ControlePonto() {
       
       if (employee.workSchedule) {
         reportContent += `Escala personalizada: ${employee.workSchedule.workHoursPerDay}h (${employee.workSchedule.workStartTime} - ${employee.workSchedule.workEndTime})\n`
+        if (employee.workSchedule.expectedBreakTime) {
+          reportContent += `Intervalo esperado: ${formatHours(employee.workSchedule.expectedBreakTime)}\n`
+        }
       }
       
       if (employeeEntries.length > 0) {
         let totalWorked = 0
         let totalOvertime = 0
         let totalLateness = 0
+        let totalMissedBreakOvertime = 0
         
         employeeEntries.forEach(entry => {
           if (entry.clockIn) {
@@ -691,6 +714,7 @@ export default function ControlePonto() {
             totalWorked += hours.worked
             totalOvertime += hours.overtime
             totalLateness += hours.lateness
+            totalMissedBreakOvertime += hours.missedBreakOvertime
             
             reportContent += `\n${formatDateForDisplay(entry.date)}:\n`
             reportContent += `  Entrada: ${entry.clockIn}\n`
@@ -709,6 +733,7 @@ export default function ControlePonto() {
             
             reportContent += `  Horas trabalhadas: ${formatHours(hours.worked)}\n`
             if (hours.overtime > 0) reportContent += `  Horas extras: ${formatHours(hours.overtime)}\n`
+            if (hours.missedBreakOvertime > 0) reportContent += `  Horas extras (intervalo não tirado): ${formatHours(hours.missedBreakOvertime)}\n`
             if (hours.lateness > 0) reportContent += `  Atraso: ${formatHours(hours.lateness)}\n`
             if (hours.discountedHours > 0) reportContent += `  Desconto: ${formatHours(hours.discountedHours)}\n`
             
@@ -721,6 +746,7 @@ export default function ControlePonto() {
         reportContent += `\nRESUMO DO PERÍODO:\n`
         reportContent += `- Total trabalhado: ${formatHours(totalWorked)}\n`
         reportContent += `- Total horas extras: ${formatHours(totalOvertime)}\n`
+        if (totalMissedBreakOvertime > 0) reportContent += `- Horas extras por intervalo não tirado: ${formatHours(totalMissedBreakOvertime)}\n`
         reportContent += `- Total atrasos: ${formatHours(totalLateness)}\n`
       } else {
         reportContent += `Não registrou ponto neste período.\n`
@@ -823,6 +849,13 @@ export default function ControlePonto() {
                             <div className="flex justify-between items-center p-3 bg-green-50 rounded-lg">
                               <span className="text-green-700 font-medium">Horas Extras:</span>
                               <span className="font-mono text-green-800">{formatHours(hours.overtime)}</span>
+                            </div>
+                          )}
+
+                          {hours.missedBreakOvertime > 0 && (
+                            <div className="flex justify-between items-center p-3 bg-orange-50 rounded-lg">
+                              <span className="text-orange-700 font-medium">Extras (Intervalo não tirado):</span>
+                              <span className="font-mono text-orange-800">{formatHours(hours.missedBreakOvertime)}</span>
                             </div>
                           )}
                         </>
@@ -1178,7 +1211,8 @@ export default function ControlePonto() {
                               workHoursPerDay: editingEmployee.workSchedule?.workHoursPerDay || workSettings.workHoursPerDay,
                               workStartTime: e.target.value,
                               workEndTime: editingEmployee.workSchedule?.workEndTime || '17:00',
-                              workDays: editingEmployee.workSchedule?.workDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+                              workDays: editingEmployee.workSchedule?.workDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+                              expectedBreakTime: editingEmployee.workSchedule?.expectedBreakTime || workSettings.expectedBreakTime
                             }
                           })}
                           className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -1200,7 +1234,8 @@ export default function ControlePonto() {
                                 workHoursPerDay: parseFloat(e.target.value) || workSettings.workHoursPerDay,
                                 workStartTime: editingEmployee.workSchedule?.workStartTime || workSettings.workStartTime,
                                 workEndTime: editingEmployee.workSchedule?.workEndTime || '17:00',
-                                workDays: editingEmployee.workSchedule?.workDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+                                workDays: editingEmployee.workSchedule?.workDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+                                expectedBreakTime: editingEmployee.workSchedule?.expectedBreakTime || workSettings.expectedBreakTime
                               }
                             })}
                             className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -1216,12 +1251,36 @@ export default function ControlePonto() {
                                 workHoursPerDay: editingEmployee.workSchedule?.workHoursPerDay || workSettings.workHoursPerDay,
                                 workStartTime: editingEmployee.workSchedule?.workStartTime || workSettings.workStartTime,
                                 workEndTime: e.target.value,
-                                workDays: editingEmployee.workSchedule?.workDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+                                workDays: editingEmployee.workSchedule?.workDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+                                expectedBreakTime: editingEmployee.workSchedule?.expectedBreakTime || workSettings.expectedBreakTime
                               }
                             })}
                             className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                           />
                         </div>
+
+                        <h4 className="font-medium text-gray-700">Tempo de Intervalo Esperado (horas)</h4>
+                        <input
+                          type="number"
+                          min="0"
+                          max="4"
+                          step="0.5"
+                          placeholder="Ex: 1"
+                          value={editingEmployee.workSchedule?.expectedBreakTime || ''}
+                          onChange={(e) => setEditingEmployee({
+                            ...editingEmployee,
+                            workSchedule: {
+                              ...editingEmployee.workSchedule,
+                              workHoursPerDay: editingEmployee.workSchedule?.workHoursPerDay || workSettings.workHoursPerDay,
+                              workStartTime: editingEmployee.workSchedule?.workStartTime || workSettings.workStartTime,
+                              workEndTime: editingEmployee.workSchedule?.workEndTime || '17:00',
+                              workDays: editingEmployee.workSchedule?.workDays || ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+                              expectedBreakTime: parseFloat(e.target.value) || workSettings.expectedBreakTime
+                            }
+                          })}
+                          className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                        
                         <p className="text-sm text-gray-500">
                           Deixe em branco para usar as configurações padrão do sistema
                         </p>
@@ -1251,11 +1310,14 @@ export default function ControlePonto() {
                         {employee.workSchedule && (
                           <div className="text-sm text-gray-600">
                             Entrada: {employee.workSchedule.workStartTime} | Jornada: {employee.workSchedule.workHoursPerDay}h | Saída: {employee.workSchedule.workEndTime}
+                            {employee.workSchedule.expectedBreakTime && (
+                              <span> | Intervalo: {formatHours(employee.workSchedule.expectedBreakTime)}</span>
+                            )}
                           </div>
                         )}
                         {!employee.workSchedule && (
                           <div className="text-sm text-gray-500">
-                            Usando configurações padrão (Entrada: {workSettings.workStartTime} | Jornada: {workSettings.workHoursPerDay}h)
+                            Usando configurações padrão (Entrada: {workSettings.workStartTime} | Jornada: {workSettings.workHoursPerDay}h | Intervalo: {formatHours(workSettings.expectedBreakTime)})
                           </div>
                         )}
                       </div>
@@ -1363,12 +1425,34 @@ export default function ControlePonto() {
                 </p>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Tempo de Intervalo Esperado Padrão (horas)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="4"
+                  step="0.5"
+                  value={workSettings.expectedBreakTime}
+                  onChange={(e) => setWorkSettings(prev => ({
+                    ...prev,
+                    expectedBreakTime: parseFloat(e.target.value) || 1
+                  }))}
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="text-sm text-gray-500 mt-1">
+                  Tempo de intervalo que o funcionário deveria tirar. Se não tirar, vira hora extra
+                </p>
+              </div>
+
               <div className="pt-4 border-t">
                 <h3 className="font-medium text-gray-800 mb-3">Configurações Atuais:</h3>
                 <div className="space-y-2 text-sm text-gray-600">
                   <div>• Jornada padrão: {workSettings.workHoursPerDay}h por dia</div>
                   <div>• Entrada padrão: {workSettings.workStartTime}</div>
                   <div>• Tolerância: {workSettings.toleranceMinutes} minutos</div>
+                  <div>• Intervalo esperado: {formatHours(workSettings.expectedBreakTime)}</div>
                   <div className="mt-2 text-xs text-gray-500">
                     * Funcionários podem ter horários personalizados que substituem as configurações padrão
                   </div>
@@ -1701,6 +1785,12 @@ export default function ControlePonto() {
                                       Tempo de intervalo: {formatHours(entry.breakTime)}
                                     </div>
                                   )}
+
+                                  {hours.missedBreakOvertime > 0 && (
+                                    <div className="text-sm text-orange-600 mt-1">
+                                      Horas extras (intervalo não tirado): {formatHours(hours.missedBreakOvertime)}
+                                    </div>
+                                  )}
                                   
                                   {entry.signature && (
                                     <div className="text-sm text-green-600 mt-1">
@@ -1798,11 +1888,14 @@ export default function ControlePonto() {
                         {employee.workSchedule && (
                           <div className="text-sm text-gray-600">
                             Entrada: {employee.workSchedule.workStartTime} | {employee.workSchedule.workHoursPerDay}h | Saída: {employee.workSchedule.workEndTime}
+                            {employee.workSchedule.expectedBreakTime && (
+                              <span> | Intervalo: {formatHours(employee.workSchedule.expectedBreakTime)}</span>
+                            )}
                           </div>
                         )}
                         {!employee.workSchedule && (
                           <div className="text-sm text-gray-500">
-                            Padrão: {workSettings.workStartTime} | {workSettings.workHoursPerDay}h
+                            Padrão: {workSettings.workStartTime} | {workSettings.workHoursPerDay}h | Intervalo: {formatHours(workSettings.expectedBreakTime)}
                           </div>
                         )}
                       </div>
@@ -1852,6 +1945,11 @@ export default function ControlePonto() {
                         <span className="text-red-600">Desconto por atraso: {formatHours(hours.discountedHours)}</span>
                       </div>
                     )}
+                    {hours.missedBreakOvertime > 0 && (
+                      <div className="mt-1 text-sm">
+                        <span className="text-orange-600">Extras (intervalo não tirado): {formatHours(hours.missedBreakOvertime)}</span>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -1864,7 +1962,7 @@ export default function ControlePonto() {
 
   const todayEntry = getTodayEntry(selectedEmployee.id)
   const currentStatus = todayEntry?.status || 'clocked-out'
-  const hours = todayEntry ? calculateHours(todayEntry) : { worked: 0, breaks: 0, overtime: 0, lateness: 0, discountedHours: 0 }
+  const hours = todayEntry ? calculateHours(todayEntry) : { worked: 0, breaks: 0, overtime: 0, lateness: 0, discountedHours: 0, missedBreakOvertime: 0 }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -1882,11 +1980,14 @@ export default function ControlePonto() {
           {selectedEmployee.workSchedule && (
             <div className="text-sm text-gray-600 mb-2">
               Entrada: {selectedEmployee.workSchedule.workStartTime} | Jornada: {selectedEmployee.workSchedule.workHoursPerDay}h | Saída: {selectedEmployee.workSchedule.workEndTime}
+              {selectedEmployee.workSchedule.expectedBreakTime && (
+                <span> | Intervalo: {formatHours(selectedEmployee.workSchedule.expectedBreakTime)}</span>
+              )}
             </div>
           )}
           {!selectedEmployee.workSchedule && (
             <div className="text-sm text-gray-500 mb-2">
-              Usando configurações padrão (Entrada: {workSettings.workStartTime} | Jornada: {workSettings.workHoursPerDay}h)
+              Usando configurações padrão (Entrada: {workSettings.workStartTime} | Jornada: {workSettings.workHoursPerDay}h | Intervalo: {formatHours(workSettings.expectedBreakTime)})
             </div>
           )}
           <div className="text-lg font-mono text-gray-600 bg-white rounded-lg p-3 shadow-sm mb-4">
@@ -2011,6 +2112,16 @@ export default function ControlePonto() {
                 <div className="text-xl font-bold text-green-800">{formatHours(hours.overtime)}</div>
               </div>
             </div>
+
+            {hours.missedBreakOvertime > 0 && (
+              <div className="p-4 bg-orange-50 rounded-lg">
+                <div className="text-orange-700 font-medium mb-1">Extras (Intervalo não tirado)</div>
+                <div className="text-xl font-bold text-orange-800">{formatHours(hours.missedBreakOvertime)}</div>
+                <div className="text-sm text-orange-600 mt-1">
+                  Tempo de intervalo que não foi tirado e virou hora extra
+                </div>
+              </div>
+            )}
 
             {(hours.lateness > 0 || hours.discountedHours > 0) && (
               <div className="grid grid-cols-2 gap-4">
